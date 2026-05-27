@@ -9,10 +9,15 @@ import {
   getMaskedApiKey,
   setApiKeyOverride,
   getApiBaseUrl,
-  setApiBaseUrlOverride,
+  setApiBaseUrlOverride, // <-- Using the accurate exported function names
   clearApiBaseUrlOverride,
 } from "../../utils/config";
 import { getFetchErrorMessage, readJson, resolveApiError } from "../../utils/api";
+
+// Stub icon for component rendering stability
+function KeyStatusIcon() {
+  return <Shield className="w-5 h-5 text-[#00A3FF]" />;
+}
 
 export default function ApiSettings() {
   const [showKey, setShowKey] = useState(false);
@@ -98,7 +103,6 @@ export default function ApiSettings() {
       }
       const data = await resp.json();
       setScans(Array.isArray(data.scans) ? data.scans : []);
-      // If backend returned apiKey usage/quota, use it to populate the usage panel
       if (data.apiKey) {
         setUsageCount(typeof data.apiKey.usage_count === 'number' ? data.apiKey.usage_count : (usageCount ?? null));
         setQuota(typeof data.apiKey.quota === 'number' ? data.apiKey.quota : (data.apiKey.quota == null ? null : quota));
@@ -116,18 +120,25 @@ export default function ApiSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
-  // Auto-refresh usage and scans periodically while an API key is active
   useEffect(() => {
     if (!apiKey) return undefined;
     const id = setInterval(() => {
       refreshAll();
     }, 15000);
     return () => clearInterval(id);
-    // only depend on apiKey
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
   const getAdminToken = () => import.meta.env.VITE_ADMIN_TOKEN || "dev_admin_token";
+
+  // Helper function to extract a Key ID by matching hashes against current active key
+  const resolveKeyIdFromCurrentKey = async (adminToken: string): Promise<string> => {
+    const list = adminKeys ?? (await fetchAdminKeys(adminToken));
+    const targetHash = await fingerprintKey(apiKey);
+    const match = list.find((k: any) => k.keyFingerprint === targetHash);
+    if (!match) throw new Error("Could not find an active key ID matching your browser's fingerprint in the database.");
+    return match.id;
+  };
 
   const handleGenerateKey = () => {
     (async () => {
@@ -199,20 +210,12 @@ export default function ApiSettings() {
 
   const loadAdminKeys = async (adminToken: string) => {
     try {
-      const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, '')}/admin/keys`, {
-        headers: { 'x-admin-token': adminToken },
-      });
-      if (!resp.ok) {
-        setAdminKeys(null);
-        setBannerMessage(await readJson<{ error?: string; details?: string }>(resp).then((payload) => resolveApiError(payload, "Unable to load admin keys.")));
-        return;
-      }
-      const data = await resp.json();
-      setAdminKeys(Array.isArray(data.keys) ? data.keys : null);
+      const keys = await fetchAdminKeys(adminToken);
+      setAdminKeys(keys);
       setBannerMessage("");
-    } catch (error) {
+    } catch (error: any) {
       setAdminKeys(null);
-      setBannerMessage(getFetchErrorMessage(error, "Unable to load admin keys."));
+      setBannerMessage(error.message || "Unable to load admin keys.");
     }
   };
 
@@ -225,9 +228,7 @@ export default function ApiSettings() {
       throw new Error(`Unable to load admin keys: ${resolveApiError(err, resp.statusText || 'Unknown error')}`);
     }
     const data = await resp.json();
-    const keys = Array.isArray(data.keys) ? data.keys : [];
-    setAdminKeys(keys);
-    return keys;
+    return Array.isArray(data.keys) ? data.keys : [];
   };
 
   const fingerprintKey = async (key: string) => {
@@ -264,16 +265,8 @@ export default function ApiSettings() {
     }
 
     if (activeDialog.kind === "setQuota") {
-      const adminKeysList = adminKeys ?? (await (async () => {
-        await loadAdminKeys(values.adminToken);
-        return adminKeys;
-      })());
-      const currentFingerprint = await fingerprintKey(apiKey);
-      const matchingKey = (adminKeysList ?? []).find((key) => key.keyFingerprint === currentFingerprint);
-      if (!matchingKey) {
-        throw new Error("Could not match the current key to an admin key ID. Refresh the key list and try again.");
-      }
-
+      // FIX: Correctly resolving keyId out of fingerprint mapping to avoid global ReferenceErrors
+      const keyId = await resolveKeyIdFromCurrentKey(values.adminToken);
       const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/set-quota`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-token": values.adminToken },
@@ -468,7 +461,7 @@ export default function ApiSettings() {
                 />
                 <button
                   onClick={() => {
-                    setApiBaseOverride(apiBase);
+                    setApiBaseUrlOverride(apiBase); // FIX: Swapped setApiBaseOverride out for the correctly imported version
                     setBaseSaved(true);
                     window.setTimeout(() => setBaseSaved(false), 1500);
                   }}
@@ -572,7 +565,7 @@ export default function ApiSettings() {
 
       <BentoCard>
         <div className="space-y-4 md:space-y-6">
-            <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start justify-between gap-4">
             <div>
               <h2 className="text-lg md:text-xl font-bold text-white">Usage & quota</h2>
               <p className="text-sm text-gray-400">Live values from the backend for the currently selected key.</p>
@@ -583,18 +576,18 @@ export default function ApiSettings() {
             </button>
           </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
             <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
               <p className="text-xs text-gray-400 mb-1">Scans used</p>
               <p className="text-xl md:text-2xl font-bold text-white">{usageCount ?? '—'}</p>
             </div>
             <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
               <p className="text-xs text-gray-400 mb-1">Remaining</p>
-                <p className={`text-xl md:text-2xl font-bold ${remaining == null ? 'text-gray-300' : 'text-[#00FF94]'}`}>{remaining == null ? '—' : remaining}</p>
+              <p className={`text-xl md:text-2xl font-bold ${remaining == null ? 'text-gray-300' : 'text-[#00FF94]'}`}>{remaining == null ? '—' : remaining}</p>
             </div>
             <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
               <p className="text-xs text-gray-400 mb-1">Quota</p>
-                <p className="text-xl md:text-2xl font-bold text-[#00A3FF]">{quota == null ? '—' : quota}</p>
+              <p className="text-xl md:text-2xl font-bold text-[#00A3FF]">{quota == null ? '—' : quota}</p>
             </div>
           </div>
 
@@ -729,26 +722,11 @@ export default function ApiSettings() {
               </div>
             </div>
             <button onClick={() => setActiveDialog({ kind: "upgrade" })} className="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-[#00FF94] to-[#00A3FF] text-[#0B0E14] font-bold rounded-lg hover:shadow-lg hover:shadow-[#00FF94]/30 transition-all text-sm md:text-base">
-              Upgrade to Research Tier
+              Upgrade
             </button>
-          </div>
-          <div className="w-full lg:w-auto bg-[#0B0E14] rounded-lg p-4 md:p-6 border border-[#1e2532] text-center lg:min-w-[220px]">
-            <p className="text-xs text-gray-400 mb-2">Research Tier</p>
-            <p className="text-2xl md:text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-[#00FF94] to-[#00A3FF]">$49</p>
-            <p className="text-xs text-gray-500 mb-4">/month</p>
-            <div className="space-y-1 text-xs text-gray-400">
-              <p>• Unlimited scans</p>
-              <p>• Advanced analytics</p>
-              <p>• Priority support</p>
-              <p>• Custom reports</p>
-            </div>
           </div>
         </div>
       </BentoCard>
     </div>
   );
-}
-
-function KeyStatusIcon() {
-  return <Shield className="w-5 h-5 text-[#00A3FF]" />;
 }
