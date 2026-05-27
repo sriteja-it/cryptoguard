@@ -2,6 +2,17 @@
  * Application configuration loaded from environment variables
  */
 
+interface ImportMetaEnv {
+  readonly VITE_API_KEY?: string;
+  readonly VITE_API_BASE_URL?: string;
+}
+
+declare global {
+  interface ImportMeta {
+    readonly env: ImportMetaEnv;
+  }
+}
+
 const API_KEY_STORAGE_KEY = "pqc_dashboard_api_key";
 const LEGACY_API_KEY_STORAGE_KEY = "pqc_api_key_override";
 const API_BASE_URL_STORAGE_KEY = "pqc_dashboard_api_base_url";
@@ -10,7 +21,7 @@ const DEFAULT_API_BASE_URL = "https://cryptoguard-9exr.onrender.com";
 const normalizeApiBaseUrl = (url: string): string => {
   const trimmed = url.trim().replace(/\/+$/, "");
   if (!trimmed) return DEFAULT_API_BASE_URL;
-  if (trimmed === "http://localhost:4004") return DEFAULT_API_BASE_URL;
+  if (trimmed === "https://cryptoguard-9exr.onrender.com") return DEFAULT_API_BASE_URL;
   return trimmed;
 };
 
@@ -61,6 +72,11 @@ export const clearApiBaseUrlOverride = () => {
   removeStoredValue(API_BASE_URL_STORAGE_KEY);
   notifyConfigChanged();
 };
+
+// ─── ALIASES TO RECTIFY UI REFERENCE ERRORS ──────────────────────────────────
+// Maps the UI's expected function names to the active implementation functions
+export const setApiBaseOverride = setApiBaseUrlOverride;
+export const clearApiBaseOverride = clearApiBaseUrlOverride;
 
 export const config = {
   get apiKey() {
