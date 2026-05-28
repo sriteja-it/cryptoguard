@@ -1,0 +1,36 @@
+[
+  {
+    "id": 1,
+    "url": "example.com",
+    "host": "example.com",
+    "scannedAt": "2026-05-19T15:20:43.628Z",
+    "certInfo": {
+      "subject": {
+        "commonName": "example.com"
+      },
+      "issuer": {
+        "countryName": "US",
+        "organizationName": "CLOUDFLARE, INC.",
+        "commonName": "Cloudflare TLS Issuing ECC CA 1"
+      },
+      "notBefore": "2026-04-02T21:18:57+00:00",
+      "notAfter": "2026-07-01T21:24:46+00:00",
+      "serialNumber": "6520589ef17eb55c664433f29f2e684a",
+      "signatureAlgorithm": "sha256",
+      "publicKeyType": "ECC",
+      "publicKeySize": 256,
+      "tlsVersion": "TLSv1.3"
+    },
+    "analysis": {
+      "riskLevel": "HIGH",
+      "quantumVulnerable": true,
+      "reasons": [
+        "ECC is vulnerable to Shor's algorithm"
+      ],
+      "recommendations": [
+        "Dilithium"
+      ]
+    },
+    "apiKeyId": 1
+  }
+]
