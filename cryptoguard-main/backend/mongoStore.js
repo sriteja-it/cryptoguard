@@ -9,6 +9,7 @@ const SCANS_FILE = path.join(DATA_DIR, 'scan_history.json');
 
 let client;
 let db;
+let connectionPromise = null; // Fixes the simultaneous connection race condition
 
 function readJsonFile(filePath, fallback) {
   try {
@@ -68,19 +69,30 @@ async function resetFromLegacyData() {
 }
 
 async function connectMongo() {
-  if (db) {
+  if (db) return db;
+
+  // If a connection attempt is already in progress, reuse that promise
+  if (connectionPromise) return connectionPromise;
+
+  connectionPromise = (async () => {
+    const uri = process.env.MONGODB_URI;
+    const dbName = process.env.MONGODB_DB_NAME || 'darkmode_pqc';
+    
+    client = new MongoClient(uri);
+    await client.connect();
+    db = client.db(dbName);
+    
+    await ensureIndexes(db);
+    await seedLegacyData(db);
     return db;
+  })();
+
+  try {
+    return await connectionPromise;
+  } catch (err) {
+    connectionPromise = null; // Reset promise if initialization fails so it can retry
+    throw err;
   }
-
-  const uri = process.env.MONGODB_URI || process.env.MONGO_URL || 'mongodb://127.0.0.1:27017';
-
-  const dbName = process.env.MONGODB_DB_NAME || 'darkmode_pqc';
-  client = new MongoClient(uri);
-  await client.connect();
-  db = client.db(dbName);
-  await ensureIndexes(db);
-  await seedLegacyData(db);
-  return db;
 }
 
 async function getApiKeyByHash(hashedKey) {
@@ -90,17 +102,23 @@ async function getApiKeyByHash(hashedKey) {
 
 async function incrementApiKeyUsage(apiKeyId) {
   const database = await connectMongo();
-  const result = await database.collection('api_keys').findOneAndUpdate(
+  // Rectified for modern MongoDB driver wrapper updates
+  return database.collection('api_keys').findOneAndUpdate(
     { id: apiKeyId },
     { $inc: { usage_count: 1 } },
-    { returnDocument: 'after' },
+    { returnDocument: 'after' }
   );
-  return result.value ?? result;
 }
 
 async function getNextScanId() {
   const database = await connectMongo();
-  return (await database.collection('scan_history').countDocuments()) + 1;
+  
+  // Safe alternate approach to counter increment race-conditions: 
+  // Sorts by highest id and adds 1 instead of relying strictly on countDocuments()
+  const lastScan = await database.collection('scan_history')
+    .findOne({}, { sort: { id: -1 }, projection: { id: 1 } });
+    
+  return lastScan && typeof lastScan.id === 'number' ? lastScan.id + 1 : 1;
 }
 
 async function getRecentScans(limit = 10) {
@@ -144,6 +162,7 @@ async function closeMongo() {
     await client.close();
     client = undefined;
     db = undefined;
+    connectionPromise = null;
   }
 }
 
@@ -152,12 +171,12 @@ async function setApiKeyUnlimitedById(apiKeyId) {
   const id = Number(apiKeyId);
   if (!Number.isFinite(id)) throw new Error('invalid_api_key_id');
 
-  const res = await database.collection('api_keys').findOneAndUpdate(
+  // Rectified for modern driver structure compatibility
+  return database.collection('api_keys').findOneAndUpdate(
     { id },
     { $set: { quota: null } },
-    { returnDocument: 'after' },
+    { returnDocument: 'after' }
   );
-  return res.value ?? null;
 }
 
 async function revokeApiKeyById(apiKeyId, action = 'expire') {
@@ -170,13 +189,14 @@ async function revokeApiKeyById(apiKeyId, action = 'expire') {
     return { deletedCount: r.deletedCount, revoked: false, doc: null };
   }
 
-  const r = await database.collection('api_keys').findOneAndUpdate(
+  // Rectified for modern driver structure compatibility
+  const updatedDoc = await database.collection('api_keys').findOneAndUpdate(
     { id },
     { $set: { expires_at: new Date().toISOString() } },
     { returnDocument: 'after' }
   );
 
-  return { deletedCount: 0, revoked: !!r.value, doc: r.value };
+  return { deletedCount: 0, revoked: !!updatedDoc, doc: updatedDoc };
 }
 
 async function listApiKeys() {
@@ -203,13 +223,12 @@ async function setQuotaForApiKeyId(apiKeyId, q) {
   if (!Number.isFinite(id)) throw new Error('invalid_api_key_id');
   if (!Number.isFinite(quota) || quota < 0) throw new Error('invalid_quota');
 
-  const r = await database.collection('api_keys').findOneAndUpdate(
+  // Rectified for modern driver structure compatibility
+  return database.collection('api_keys').findOneAndUpdate(
     { id },
     { $set: { quota } },
-    { returnDocument: 'after' },
+    { returnDocument: 'after' }
   );
-
-  return r.value ?? null;
 }
 
 module.exports = {

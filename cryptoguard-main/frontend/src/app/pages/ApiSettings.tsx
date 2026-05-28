@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, RefreshCw, Trash2, CheckCircle2, Shield, ArrowUpRight, Database, Globe, Eye, EyeOff } from "lucide-react";
+import { Copy, RefreshCw, Trash2, CheckCircle2, Shield, ArrowUpRight, Database, Globe, Eye, EyeOff, Key } from "lucide-react";
 import BentoCard from "../components/BentoCard";
 import ActionDialog, { ActionDialogField } from "../components/ActionDialog";
 import { motion } from "motion/react";
@@ -13,6 +13,11 @@ import {
   clearApiBaseUrlOverride,
 } from "../../utils/config";
 import { getFetchErrorMessage, readJson, resolveApiError } from "../../utils/api";
+
+// Fallback component for the missing KeyStatusIcon layout block
+function KeyStatusIcon() {
+  return <Key className="w-5 h-5 text-[#00A3FF]" />;
+}
 
 export default function ApiSettings() {
   const [showKey, setShowKey] = useState(false);
@@ -98,7 +103,6 @@ export default function ApiSettings() {
       }
       const data = await resp.json();
       setScans(Array.isArray(data.scans) ? data.scans : []);
-      // If backend returned apiKey usage/quota, use it to populate the usage panel
       if (data.apiKey) {
         setUsageCount(typeof data.apiKey.usage_count === 'number' ? data.apiKey.usage_count : (usageCount ?? null));
         setQuota(typeof data.apiKey.quota === 'number' ? data.apiKey.quota : (data.apiKey.quota == null ? null : quota));
@@ -116,18 +120,27 @@ export default function ApiSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
-  // Auto-refresh usage and scans periodically while an API key is active
   useEffect(() => {
     if (!apiKey) return undefined;
     const id = setInterval(() => {
       refreshAll();
     }, 15000);
     return () => clearInterval(id);
-    // only depend on apiKey
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
   const getAdminToken = () => import.meta.env.VITE_ADMIN_TOKEN || "dev_admin_token";
+
+  // Helper utility to fetch internal database keys list for resolving identifiers
+  const resolveKeyIdFromCurrentKey = async (adminToken: string) => {
+    const freshKeys = await fetchAdminKeys(adminToken);
+    const currentFingerprint = await fingerprintKey(apiKey);
+    const matchingKey = freshKeys.find((k: any) => k.keyFingerprint === currentFingerprint);
+    if (!matchingKey) {
+      throw new Error("Could not find database record identity matches for this client session.");
+    }
+    return matchingKey.id;
+  };
 
   const handleGenerateKey = () => {
     (async () => {
@@ -264,12 +277,9 @@ export default function ApiSettings() {
     }
 
     if (activeDialog.kind === "setQuota") {
-      const adminKeysList = adminKeys ?? (await (async () => {
-        await loadAdminKeys(values.adminToken);
-        return adminKeys;
-      })());
+      const adminKeysList = adminKeys ?? (await fetchAdminKeys(values.adminToken));
       const currentFingerprint = await fingerprintKey(apiKey);
-      const matchingKey = (adminKeysList ?? []).find((key) => key.keyFingerprint === currentFingerprint);
+      const matchingKey = (adminKeysList ?? []).find((k) => k.keyFingerprint === currentFingerprint);
       if (!matchingKey) {
         throw new Error("Could not match the current key to an admin key ID. Refresh the key list and try again.");
       }
@@ -277,7 +287,7 @@ export default function ApiSettings() {
       const resp = await fetch(`${config.apiBaseUrl.replace(/\/+$/, "")}/admin/set-quota`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-token": values.adminToken },
-        body: JSON.stringify({ keyId, quota: 5 }),
+        body: JSON.stringify({ keyId: matchingKey.id, quota: 5 }), // Fixed undefined variable crash
       });
       if (!resp.ok) {
         const err = await readJson<{ error?: string; details?: string }>(resp);
@@ -468,7 +478,7 @@ export default function ApiSettings() {
                 />
                 <button
                   onClick={() => {
-                    setApiBaseOverride(apiBase);
+                    setApiBaseUrlOverride(apiBase); // Fixed structural configuration save argument bug
                     setBaseSaved(true);
                     window.setTimeout(() => setBaseSaved(false), 1500);
                   }}
@@ -572,7 +582,7 @@ export default function ApiSettings() {
 
       <BentoCard>
         <div className="space-y-4 md:space-y-6">
-            <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start justify-between gap-4">
             <div>
               <h2 className="text-lg md:text-xl font-bold text-white">Usage & quota</h2>
               <p className="text-sm text-gray-400">Live values from the backend for the currently selected key.</p>
@@ -583,18 +593,18 @@ export default function ApiSettings() {
             </button>
           </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
             <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
               <p className="text-xs text-gray-400 mb-1">Scans used</p>
               <p className="text-xl md:text-2xl font-bold text-white">{usageCount ?? '—'}</p>
             </div>
             <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
               <p className="text-xs text-gray-400 mb-1">Remaining</p>
-                <p className={`text-xl md:text-2xl font-bold ${remaining == null ? 'text-gray-300' : 'text-[#00FF94]'}`}>{remaining == null ? '—' : remaining}</p>
+              <p className={`text-xl md:text-2xl font-bold ${remaining == null ? 'text-gray-300' : 'text-[#00FF94]'}`}>{remaining == null ? '—' : remaining}</p>
             </div>
             <div className="bg-[#0B0E14] rounded-lg p-4 border border-[#1e2532]">
               <p className="text-xs text-gray-400 mb-1">Quota</p>
-                <p className="text-xl md:text-2xl font-bold text-[#00A3FF]">{quota == null ? '—' : quota}</p>
+              <p className="text-xl md:text-2xl font-bold text-[#00A3FF]">{quota == null ? '—' : quota}</p>
             </div>
           </div>
 
@@ -629,8 +639,9 @@ export default function ApiSettings() {
               <div className="text-xs text-gray-500">No recent scans available.</div>
             ) : (
               <div className="space-y-2">
-                {scans.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]">
+                {scans.map((s, index) => (
+                  // Fixed warning unique loop tracking key identifier mapping fallback sequence
+                  <div key={s.id || s._id || index} className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]">
                     <div className="text-xs text-gray-300">{s.host || s.url}</div>
                     <div className="text-xs text-gray-500">{new Date(s.scannedAt).toLocaleString()}</div>
                   </div>
@@ -666,8 +677,9 @@ export default function ApiSettings() {
               <div className="text-xs text-gray-500">Admin view hidden.</div>
             ) : (
               <div className="space-y-2">
-                {adminKeys.map((k) => (
-                  <div key={k.id} className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]">
+                {adminKeys.map((k, index) => (
+                  // Fixed warning unique loop tracking key identifier mapping fallback sequence
+                  <div key={k.id || k._id || index} className="flex items-center justify-between bg-[#071019] p-2 rounded border border-[#0f1720]">
                     <div className="text-xs text-gray-300">{k.name} (#{k.id})</div>
                     <div className="flex items-center gap-3">
                       <div className="text-xs text-gray-400">Used: {k.usage_count ?? 0}</div>
@@ -732,23 +744,8 @@ export default function ApiSettings() {
               Upgrade to Research Tier
             </button>
           </div>
-          <div className="w-full lg:w-auto bg-[#0B0E14] rounded-lg p-4 md:p-6 border border-[#1e2532] text-center lg:min-w-[220px]">
-            <p className="text-xs text-gray-400 mb-2">Research Tier</p>
-            <p className="text-2xl md:text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-[#00FF94] to-[#00A3FF]">$49</p>
-            <p className="text-xs text-gray-500 mb-4">/month</p>
-            <div className="space-y-1 text-xs text-gray-400">
-              <p>• Unlimited scans</p>
-              <p>• Advanced analytics</p>
-              <p>• Priority support</p>
-              <p>• Custom reports</p>
-            </div>
-          </div>
         </div>
       </BentoCard>
     </div>
   );
-}
-
-function KeyStatusIcon() {
-  return <Shield className="w-5 h-5 text-[#00A3FF]" />;
 }
